@@ -4,6 +4,7 @@ eagle-cad board (.brd) to dxf converter
 
 * Tested with eagle version="9.0.1" - XML-Format
 * alpha-version !!!
+* ugly code, one day Hack :)
 
 ## quikstart
 
