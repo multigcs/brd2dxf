@@ -21,7 +21,7 @@ pip3 install -r requirements.txt
 ```
 this command line will generate a dxf file named: eltako.brd.dxf
 
-you can use the dxf file for you cnc to encrave the copper, drill holes or mill smd-masks..
+you can use the dxf file for you cnc to engrave the copper, drill holes or mill smd-masks..
 
 ## screenshots
 
