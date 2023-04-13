@@ -4,6 +4,7 @@ import math
 import ezdxf
 import shapely
 import xmltodict
+from ezdxf import zoom
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
@@ -776,9 +777,7 @@ def main():
 
     for vport in doc.viewports.get_config("*Active"):  # type: ignore
         vport.dxf.grid_on = True
-    if hasattr(ezdxf, "zoom"):
-        ezdxf.zoom.extents(msp)  # type: ignore
+    zoom.extents(msp)  # type: ignore
 
     print(f"writing dxf-file: {args.output}")
     doc.saveas(args.output)
-
