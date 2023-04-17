@@ -713,6 +713,8 @@ def main():
             u = u.geoms
         for poly in u:
             points = list(poly.exterior.coords)
+            if not points:
+                continue
             last = points[-1]
             for p in points:
                 msp.add_line(
