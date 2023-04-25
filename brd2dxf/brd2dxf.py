@@ -61,11 +61,11 @@ def rotate_point(
     return (new_x, new_y)
 
 
-def draw_circle(center, radius):
+def draw_circle(center, radius, steps=18):
     """draws an circle"""
     points = []
-    angle = 0.0
-    step = math.pi / 9
+    step = math.pi * 2 / steps
+    angle = -step / 2
     while angle < math.pi * 2 + step:
         p_x = center[0] + radius * math.sin(angle)
         p_y = center[1] - radius * math.cos(angle)
@@ -376,9 +376,10 @@ def main():
                                 )
 
                         if "pad" in package:
-                            if isinstance(package["pad"], dict):
-                                package["pad"] = [package["pad"]]
-                            for pad in package["pad"]:
+                            pads = package["pad"]
+                            if isinstance(pads, dict):
+                                pads = [pads]
+                            for pad in pads:
                                 layer = "Top"
                                 if layer not in polygons:
                                     polygons[layer] = []
@@ -387,7 +388,7 @@ def main():
                                     polygons[layer] = []
 
                                 shape = pad.get("@shape")
-                                if shape != "long":
+                                if shape not in ["long", "octagon"]:
                                     print("Unsupported shape:", shape)
 
                                 px = float(pad["@x"])
@@ -432,6 +433,7 @@ def main():
                                 )
                                 layers_in_use.add("Drills")
                                 if "@diameter" in pad:
+                                    # round shape
 
                                     for layer in ["Top", "Bottom"]:
 
@@ -451,12 +453,22 @@ def main():
                                         ):  # TODO: check if inside
 
                                             diameter = float(pad["@diameter"])
-                                            polygons[layer].append(
-                                                Polygon(
-                                                    draw_circle((x, y), diameter / 2)
+
+                                            if shape == "octagon":
+                                                polygons[layer].append(
+                                                    Polygon(
+                                                        draw_circle((x, y), diameter / 2, 8)
+                                                    )
                                                 )
-                                            )
+                                            else:
+                                                polygons[layer].append(
+                                                    Polygon(
+                                                        draw_circle((x, y), diameter / 2)
+                                                    )
+                                                )
                                 else:
+                                    # long shape
+
                                     pad_size = drill / 3 * 2
                                     x1 = x + pad_size
                                     y1 = y
