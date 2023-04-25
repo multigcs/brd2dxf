@@ -40,6 +40,14 @@ dxfcolors = {
 }
 
 
+layerdata = {}
+layers_in_use = set()
+polygons = {}
+polygon_areas = {}
+signals2pads = {}
+plain = []
+
+
 def angle_of_line(p_1, p_2):
     """gets the angle of a single line."""
     return math.atan2(p_2[1] - p_1[1], p_2[0] - p_1[0])
@@ -74,6 +82,514 @@ def draw_circle(center, radius, steps=18):
     return points
 
 
+def signal_add_wire(msp, wire, signal_name):
+    x1 = float(wire["@x1"])
+    y1 = float(wire["@y1"])
+    x2 = float(wire["@x2"])
+    y2 = float(wire["@y2"])
+    lw = float(wire["@width"])
+    layer = layerdata[wire["@layer"]]["@name"]
+    color = layerdata[wire["@layer"]]["@fill"]
+    radius = lw / 2
+    p_from = (x1, y1)
+    p_to = (x2, y2)
+    line_angle = angle_of_line(p_from, p_to)
+
+    if layer not in polygons:
+        polygons[layer] = []
+
+    polygons[layer].append(Polygon(draw_circle((x1, y1), radius)))
+    polygons[layer].append(Polygon(draw_circle((x2, y2), radius)))
+    x_out_from = p_from[0] + radius * math.sin(line_angle)
+    y_out_from = p_from[1] - radius * math.cos(line_angle)
+    x_in_from = p_from[0] + radius * math.sin(line_angle + math.pi)
+    y_in_from = p_from[1] - radius * math.cos(line_angle + math.pi)
+    x_out_to = p_to[0] + radius * math.sin(line_angle)
+    y_out_to = p_to[1] - radius * math.cos(line_angle)
+    x_in_to = p_to[0] + radius * math.sin(line_angle + math.pi)
+    y_in_to = p_to[1] - radius * math.cos(line_angle + math.pi)
+    polygons[layer].append(
+        Polygon(
+            [
+                (x_in_from, y_in_from),
+                (x_in_to, y_in_to),
+                (x_out_to, y_out_to),
+                (x_out_from, y_out_from),
+            ]
+        )
+    )
+
+
+def signal_add_via(msp, via, signal_name):
+    x = float(via["@x"])
+    y = float(via["@y"])
+    drill = float(via["@drill"])
+    size = 1
+    if "@diameter" in via:
+        size = float(via["@diameter"])
+    elif "@extent" in via:
+        size = drill / 2 + float(via["@extent"].split("-")[1]) / 100
+    msp.add_circle((x, y), drill / 2, dxfattribs={"layer": "Drills"})
+    layers_in_use.add("Drills")
+
+    for layer in ["Top", "Bottom"]:
+        area_name = f"{layer}_{signal_name}"
+        if area_name not in polygon_areas:  # TODO: check if inside
+            if layer not in polygons:
+                polygons[layer] = []
+            polygons[layer].append(Polygon(draw_circle((x, y), size)))
+
+
+def signal_add_polygon(msp, polygon, signal_name):
+    lw = float(polygon["@width"])
+    layer = layerdata[polygon["@layer"]]["@name"]
+    color = layerdata[polygon["@layer"]]["@color"]
+    last = (
+        float(polygon["vertex"][-1]["@x"]),
+        float(polygon["vertex"][-1]["@y"]),
+    )
+
+    points = []
+    for point in polygon["vertex"]:
+        x = float(point["@x"])
+        y = float(point["@y"])
+        points.append((x, y))
+
+    area_name = f"{layer}_{signal_name}"
+    if area_name not in polygon_areas:
+        polygon_areas[area_name] = []
+
+    polygon_areas[area_name].append(points)
+
+    layer_org = layer
+
+    layer = f"{layer_org}Poly"
+    if layer not in polygons:
+        polygons[layer] = []
+
+    bigpoly = Polygon(points)
+    frame = Polygon(plain)
+
+    clipped_polygon = bigpoly.intersection(frame)
+    polygons[layer].append(clipped_polygon)
+
+
+def package_add_pad(
+    msp,
+    pad,
+    layer,
+    element_name,
+    element_x,
+    element_y,
+    element_rot_angle,
+    element_mirror,
+):
+    layer = "Top"
+    if layer not in polygons:
+        polygons[layer] = []
+    layer = "Bottom"
+    if layer not in polygons:
+        polygons[layer] = []
+
+    shape = pad.get("@shape")
+    if shape not in ["long", "octagon"]:
+        print("Unsupported shape:", shape)
+
+    px = float(pad["@x"])
+    py = float(pad["@y"])
+    if element_mirror:
+        px *= -1
+
+    if "@rot" in pad:
+        rot = pad["@rot"]
+        rot_dir = rot[0]
+        rot_angle = float(rot[1:])
+    else:
+        rot = ""
+        rot_dir = "R"
+        rot_angle = 0.0
+
+    if rot_angle and False:
+        x = px
+        y = py
+        (x, y) = rotate_point(0.0, 0.0, x, y, rot_angle * math.pi / 180)
+        x = element_x + x
+        y = element_y + y
+    else:
+        x = element_x + px
+        y = element_y + py
+
+    if element_rot_angle:
+        (x, y) = rotate_point(
+            element_x,
+            element_y,
+            x,
+            y,
+            element_rot_angle * math.pi / 180,
+        )
+    drill = float(pad["@drill"])
+    msp.add_circle(
+        (x, y),
+        drill / 2,
+        dxfattribs={"layer": "Drills"},
+    )
+    layers_in_use.add("Drills")
+    if "@diameter" in pad:
+        # round and octagon shape
+
+        for layer in ["Top", "Bottom"]:
+            signal_name = ""
+            for sname in signals2pads:
+                for spad in signals2pads[sname]:
+                    if (
+                        pad["@name"] == spad["@pad"]
+                        and element_name == spad["@element"]
+                    ):
+                        signal_name = sname
+                        break
+            area_name = f"{layer}_{signal_name}"
+            if area_name not in polygon_areas:  # TODO: check if inside
+
+                diameter = float(pad["@diameter"])
+
+                if shape == "octagon":
+                    polygons[layer].append(
+                        Polygon(draw_circle((x, y), diameter / 2, 8))
+                    )
+                else:
+                    polygons[layer].append(Polygon(draw_circle((x, y), diameter / 2)))
+    else:
+        # long shape
+
+        pad_size = drill / 3 * 2
+        x1 = x + pad_size
+        y1 = y
+        x2 = x - pad_size
+        y2 = y
+        if rot_angle:
+            (x1, y1) = rotate_point(x, y, x1, y1, rot_angle * math.pi / 180)
+            (x2, y2) = rotate_point(x, y, x2, y2, rot_angle * math.pi / 180)
+        if element_rot_angle and rot:
+            (x1, y1) = rotate_point(
+                x,
+                y,
+                x1,
+                y1,
+                element_rot_angle * math.pi / 180,
+            )
+            (x2, y2) = rotate_point(
+                x,
+                y,
+                x2,
+                y2,
+                element_rot_angle * math.pi / 180,
+            )
+        for layer in ["Top", "Bottom"]:
+            signal_name = ""
+            for sname in signals2pads:
+                for spad in signals2pads[sname]:
+                    if (
+                        pad["@name"] == spad["@pad"]
+                        and element_name == spad["@element"]
+                    ):
+                        signal_name = sname
+                        break
+            area_name = f"{layer}_{signal_name}"
+            if area_name not in polygon_areas:  # TODO: check if inside
+
+                polygons[layer].append(Polygon(draw_circle((x1, y1), pad_size)))
+                polygons[layer].append(Polygon(draw_circle((x2, y2), pad_size)))
+        x1 = x + pad_size
+        y1 = y - pad_size
+        x2 = x - pad_size
+        y2 = y - pad_size
+        if rot_angle:
+            (x1, y1) = rotate_point(x, y, x1, y1, rot_angle * math.pi / 180)
+            (x2, y2) = rotate_point(x, y, x2, y2, rot_angle * math.pi / 180)
+        if element_rot_angle and rot:
+            (x1, y1) = rotate_point(
+                x,
+                y,
+                x1,
+                y1,
+                element_rot_angle * math.pi / 180,
+            )
+            (x2, y2) = rotate_point(
+                x,
+                y,
+                x2,
+                y2,
+                element_rot_angle * math.pi / 180,
+            )
+        x3 = x + pad_size
+        y3 = y + pad_size
+        x4 = x - pad_size
+        y4 = y + pad_size
+        if rot_angle:
+            (x3, y3) = rotate_point(x, y, x3, y3, rot_angle * math.pi / 180)
+            (x4, y4) = rotate_point(x, y, x4, y4, rot_angle * math.pi / 180)
+        if element_rot_angle and rot:
+            (x3, y3) = rotate_point(
+                x,
+                y,
+                x3,
+                y3,
+                element_rot_angle * math.pi / 180,
+            )
+            (x4, y4) = rotate_point(
+                x,
+                y,
+                x4,
+                y4,
+                element_rot_angle * math.pi / 180,
+            )
+        for layer in ["Top", "Bottom"]:
+            signal_name = ""
+            for sname in signals2pads:
+                for spad in signals2pads[sname]:
+                    if (
+                        pad["@name"] == spad["@pad"]
+                        and element_name == spad["@element"]
+                    ):
+                        signal_name = sname
+                        break
+            area_name = f"{layer}_{signal_name}"
+            if area_name not in polygon_areas:  # TODO: check if inside
+                polygons[layer].append(
+                    Polygon(
+                        [
+                            (x1, y1),
+                            (x2, y2),
+                            (x4, y4),
+                            (x3, y3),
+                        ]
+                    )
+                )
+
+
+def package_add_circle(
+    msp,
+    circle,
+    layer,
+    element_name,
+    element_x,
+    element_y,
+    element_rot_angle,
+    element_mirror,
+):
+    x = element_x + float(circle["@x"])
+    y = element_y + float(circle["@y"])
+    radius = float(circle["@radius"])
+    lw = float(circle["@width"])
+    layer = layerdata[circle["@layer"]]["@name"]
+    color = layerdata[rectangle["@layer"]]["@fill"]
+    if element_rot_angle:
+        (x, y) = rotate_point(
+            element_x,
+            element_y,
+            x,
+            y,
+            element_rot_angle * math.pi / 180,
+        )
+    msp.add_circle((x, y), radius, dxfattribs={"layer": layer})
+    layers_in_use.add(layer)
+
+
+def package_add_wire(
+    msp,
+    wire,
+    layer,
+    element_name,
+    element_x,
+    element_y,
+    element_rot_angle,
+    element_mirror,
+):
+    x1 = element_x + float(wire["@x1"])
+    x2 = element_x + float(wire["@x2"])
+    y1 = element_y + float(wire["@y1"])
+    y2 = element_y + float(wire["@y2"])
+    lw = float(wire["@width"])
+    layer = layerdata[wire["@layer"]]["@name"]
+    color = layerdata[wire["@layer"]]["@fill"]
+    if element_rot_angle:
+        (x1, y1) = rotate_point(
+            element_x,
+            element_y,
+            x1,
+            y1,
+            element_rot_angle * math.pi / 180,
+        )
+        (x2, y2) = rotate_point(
+            element_x,
+            element_y,
+            x2,
+            y2,
+            element_rot_angle * math.pi / 180,
+        )
+    msp.add_line(
+        (x1, y1),
+        (x2, y2),
+        dxfattribs={
+            "layer": layer,
+            "lineweight": lw * 100,
+        },
+    )
+    layers_in_use.add(layer)
+
+
+def package_add_rectangle(
+    msp,
+    rectangle,
+    layer,
+    element_name,
+    element_x,
+    element_y,
+    element_rot_angle,
+    element_mirror,
+):
+    x1 = element_x + float(rectangle["@x1"])
+    x2 = element_x + float(rectangle["@x2"])
+    y1 = element_y + float(rectangle["@y1"])
+    y2 = element_y + float(rectangle["@y2"])
+    layer = layerdata[rectangle["@layer"]]["@name"]
+    color = layerdata[rectangle["@layer"]]["@fill"]
+    if element_rot_angle:
+        (x1, y1) = rotate_point(
+            element_x,
+            element_y,
+            x1,
+            y1,
+            element_rot_angle * math.pi / 180,
+        )
+        (x2, y2) = rotate_point(
+            element_x,
+            element_y,
+            x2,
+            y2,
+            element_rot_angle * math.pi / 180,
+        )
+    msp.add_line(
+        (x1, y1),
+        (x1, y2),
+        dxfattribs={"layer": layer},
+    )
+    msp.add_line(
+        (x1, y2),
+        (x2, y2),
+        dxfattribs={"layer": layer},
+    )
+    msp.add_line(
+        (x2, y2),
+        (x2, y1),
+        dxfattribs={"layer": layer},
+    )
+    msp.add_line(
+        (x2, y1),
+        (x1, y1),
+        dxfattribs={"layer": layer},
+    )
+    layers_in_use.add(layer)
+
+
+def package_add_smd(
+    msp,
+    smd,
+    layer,
+    element_name,
+    element_x,
+    element_y,
+    element_rot_angle,
+    element_mirror,
+):
+    x = element_x + float(smd["@x"])
+    y = element_y + float(smd["@y"])
+    dx = float(smd["@dx"])
+    dy = float(smd["@dy"])
+    x1 = x - dx / 2
+    y1 = y - dy / 2
+    x2 = x + dx / 2
+    y2 = y + dy / 2
+    if "@rot" in smd:
+        rot = smd["@rot"]
+        rot_dir = rot[0]
+        rot_angle = float(rot[1:])
+    else:
+        rot = ""
+        rot_dir = "R"
+        rot_angle = 0.0
+    if element_rot_angle:
+        (x1, y1) = rotate_point(
+            element_x,
+            element_y,
+            x1,
+            y1,
+            element_rot_angle * math.pi / 180,
+        )
+        (x2, y2) = rotate_point(
+            element_x,
+            element_y,
+            x2,
+            y2,
+            element_rot_angle * math.pi / 180,
+        )
+
+    if rot_angle:
+        cx = x1 + (x2 - x1) / 2
+        cy = y1 + (y2 - y1) / 2
+        (x1, y1) = rotate_point(
+            cx,
+            cy,
+            x1,
+            y1,
+            rot_angle * math.pi / 180,
+        )
+        (x2, y2) = rotate_point(
+            cx,
+            cy,
+            x2,
+            y2,
+            rot_angle * math.pi / 180,
+        )
+
+    signal_name = ""
+    for sname in signals2pads:
+        for spad in signals2pads[sname]:
+            if smd["@name"] == spad["@pad"] and element_name == spad["@element"]:
+                signal_name = sname
+                break
+    area_name = f"{layer}_{signal_name}"
+    if area_name not in polygon_areas:  # TODO: check if inside
+
+        if layer not in polygons:
+            polygons[layer] = []
+
+        polygons[layer].append(
+            Polygon(
+                [
+                    (x1, y1),
+                    (x1, y2),
+                    (x2, y2),
+                    (x2, y1),
+                ]
+            )
+        )
+
+    p_layer = f"{layer}SMD"
+    if p_layer not in polygons:
+        polygons[p_layer] = []
+    polygons[p_layer].append(
+        Polygon(
+            [
+                (x1, y1),
+                (x1, y2),
+                (x2, y2),
+                (x2, y1),
+            ]
+        )
+    )
+
+
 def main():
 
     parser = argparse.ArgumentParser()
@@ -97,13 +613,6 @@ def main():
     doc = ezdxf.new(setup=True)
     msp = doc.modelspace()
     doc.units = ezdxf.units.MM
-
-    layerdata = {}
-    layers_in_use = set()
-    polygons = {}
-    polygon_areas = {}
-    signals2pads = {}
-    plain = []
 
     print(f"reading brd-file: {args.filename}")
     xmldata = open(args.filename, "r").read()
@@ -142,131 +651,49 @@ def main():
             dxfattribs={"layer": layer, "lineweight": lw * 100},
         )
         layers_in_use.add(layer)
-
         plain.append((x1, y1))
         plain.append((x2, y2))
 
     for signal in board["signals"]["signal"]:
+        signal_name = signal.get("@name", "")
         if "contactref" in signal:
             if isinstance(signal["contactref"], dict):
                 signal["contactref"] = [signal["contactref"]]
             for contactref in signal["contactref"]:
-                sname = signal["@name"]
-                if sname not in signals2pads:
-                    signals2pads[sname] = []
-                signals2pads[sname].append(contactref)
+                if signal_name not in signals2pads:
+                    signals2pads[signal_name] = []
+                signals2pads[signal_name].append(contactref)
 
         if "polygon" in signal:
             if isinstance(signal["polygon"], dict):
                 signal["polygon"] = [signal["polygon"]]
             for polygon in signal["polygon"]:
-                lw = float(polygon["@width"])
-                layer = layerdata[polygon["@layer"]]["@name"]
-                color = layerdata[polygon["@layer"]]["@color"]
-                last = (
-                    float(polygon["vertex"][-1]["@x"]),
-                    float(polygon["vertex"][-1]["@y"]),
-                )
-
-                points = []
-                for point in polygon["vertex"]:
-                    x = float(point["@x"])
-                    y = float(point["@y"])
-                    points.append((x, y))
-
-                area_name = f"{layer}_{signal['@name']}"
-                if area_name not in polygon_areas:
-                    polygon_areas[area_name] = []
-
-                polygon_areas[area_name].append(points)
-
-                layer_org = layer
-
-                layer = f"{layer_org}Poly"
-                if layer not in polygons:
-                    polygons[layer] = []
-
-                bigpoly = Polygon(points)
-                frame = Polygon(plain)
-
-                clipped_polygon = bigpoly.intersection(frame)
-                polygons[layer].append(clipped_polygon)
+                signal_add_polygon(msp, polygon, signal_name)
 
         if "via" in signal:
             if isinstance(signal["via"], dict):
                 signal["via"] = [signal["via"]]
             for via in signal["via"]:
-                x = float(via["@x"])
-                y = float(via["@y"])
-                drill = float(via["@drill"])
-                size = 1
-                if "@diameter" in via:
-                    size = float(via["@diameter"])
-                elif "@extent" in via:
-                    size = drill / 2 + float(via["@extent"].split("-")[1]) / 100
-                msp.add_circle((x, y), drill / 2, dxfattribs={"layer": "Drills"})
-                layers_in_use.add("Drills")
-
-                for layer in ["Top", "Bottom"]:
-                    signal_name = signal["@name"]
-                    area_name = f"{layer}_{signal_name}"
-                    if area_name not in polygon_areas:  # TODO: check if inside
-                        if layer not in polygons:
-                            polygons[layer] = []
-                        polygons[layer].append(Polygon(draw_circle((x, y), size)))
+                signal_add_via(msp, via, signal_name)
 
         if "wire" in signal:
             if isinstance(signal["wire"], dict):
                 signal["wire"] = [signal["wire"]]
             for wire in signal["wire"]:
-                x1 = float(wire["@x1"])
-                y1 = float(wire["@y1"])
-                x2 = float(wire["@x2"])
-                y2 = float(wire["@y2"])
-                lw = float(wire["@width"])
-                layer = layerdata[wire["@layer"]]["@name"]
-                color = layerdata[wire["@layer"]]["@fill"]
-                radius = lw / 2
-                p_from = (x1, y1)
-                p_to = (x2, y2)
-                line_angle = angle_of_line(p_from, p_to)
-
-                if layer not in polygons:
-                    polygons[layer] = []
-
-                polygons[layer].append(Polygon(draw_circle((x1, y1), radius)))
-                polygons[layer].append(Polygon(draw_circle((x2, y2), radius)))
-                x_out_from = p_from[0] + radius * math.sin(line_angle)
-                y_out_from = p_from[1] - radius * math.cos(line_angle)
-                x_in_from = p_from[0] + radius * math.sin(line_angle + math.pi)
-                y_in_from = p_from[1] - radius * math.cos(line_angle + math.pi)
-                x_out_to = p_to[0] + radius * math.sin(line_angle)
-                y_out_to = p_to[1] - radius * math.cos(line_angle)
-                x_in_to = p_to[0] + radius * math.sin(line_angle + math.pi)
-                y_in_to = p_to[1] - radius * math.cos(line_angle + math.pi)
-                polygons[layer].append(
-                    Polygon(
-                        [
-                            (x_in_from, y_in_from),
-                            (x_in_to, y_in_to),
-                            (x_out_to, y_out_to),
-                            (x_out_from, y_out_from),
-                        ]
-                    )
-                )
+                signal_add_wire(msp, wire, signal_name)
 
     for element in board["elements"]["element"]:
+        element_name = element["@name"]
         element_x = float(element["@x"])
         element_y = float(element["@y"])
         layer = "Top"
-        mirror = False
+        element_mirror = False
         element_rot_angle = 0
         if "@rot" in element:
             rotate = element["@rot"]
             if rotate[0] == "M":
                 layer = "Bottom"
-                # TODO: move center / mirror y ?
-                mirror = True
+                element_mirror = True
                 element_rot_angle = float(rotate[2:])
             else:
                 element_rot_angle = float(rotate[1:])
@@ -283,96 +710,15 @@ def main():
                             if isinstance(package["smd"], dict):
                                 package["smd"] = [package["smd"]]
                             for smd in package["smd"]:
-                                x = element_x + float(smd["@x"])
-                                y = element_y + float(smd["@y"])
-                                dx = float(smd["@dx"])
-                                dy = float(smd["@dy"])
-                                x1 = x - dx / 2
-                                y1 = y - dy / 2
-                                x2 = x + dx / 2
-                                y2 = y + dy / 2
-                                if "@rot" in smd:
-                                    rot = smd["@rot"]
-                                    rot_dir = rot[0]
-                                    rot_angle = float(rot[1:])
-                                else:
-                                    rot = ""
-                                    rot_dir = "R"
-                                    rot_angle = 0.0
-                                if element_rot_angle:
-                                    (x1, y1) = rotate_point(
-                                        element_x,
-                                        element_y,
-                                        x1,
-                                        y1,
-                                        element_rot_angle * math.pi / 180,
-                                    )
-                                    (x2, y2) = rotate_point(
-                                        element_x,
-                                        element_y,
-                                        x2,
-                                        y2,
-                                        element_rot_angle * math.pi / 180,
-                                    )
-
-                                if rot_angle:
-                                    cx = x1 + (x2 - x1) / 2
-                                    cy = y1 + (y2 - y1) / 2
-                                    (x1, y1) = rotate_point(
-                                        cx,
-                                        cy,
-                                        x1,
-                                        y1,
-                                        rot_angle * math.pi / 180,
-                                    )
-                                    (x2, y2) = rotate_point(
-                                        cx,
-                                        cy,
-                                        x2,
-                                        y2,
-                                        rot_angle * math.pi / 180,
-                                    )
-
-                                signal_name = ""
-                                for sname in signals2pads:
-                                    for spad in signals2pads[sname]:
-                                        if (
-                                            smd["@name"] == spad["@pad"]
-                                            and element["@name"] == spad["@element"]
-                                        ):
-                                            signal_name = sname
-                                            break
-                                area_name = f"{layer}_{signal_name}"
-                                if (
-                                    area_name not in polygon_areas
-                                ):  # TODO: check if inside
-
-                                    if layer not in polygons:
-                                        polygons[layer] = []
-
-                                    polygons[layer].append(
-                                        Polygon(
-                                            [
-                                                (x1, y1),
-                                                (x1, y2),
-                                                (x2, y2),
-                                                (x2, y1),
-                                            ]
-                                        )
-                                    )
-
-                                p_layer = f"{layer}SMD"
-                                if p_layer not in polygons:
-                                    polygons[p_layer] = []
-                                polygons[p_layer].append(
-                                    Polygon(
-                                        [
-                                            (x1, y1),
-                                            (x1, y2),
-                                            (x2, y2),
-                                            (x2, y1),
-                                        ]
-                                    )
+                                package_add_smd(
+                                    msp,
+                                    smd,
+                                    layer,
+                                    element_name,
+                                    element_x,
+                                    element_y,
+                                    element_rot_angle,
+                                    element_mirror,
                                 )
 
                         if "pad" in package:
@@ -380,327 +726,61 @@ def main():
                             if isinstance(pads, dict):
                                 pads = [pads]
                             for pad in pads:
-                                layer = "Top"
-                                if layer not in polygons:
-                                    polygons[layer] = []
-                                layer = "Bottom"
-                                if layer not in polygons:
-                                    polygons[layer] = []
-
-                                shape = pad.get("@shape")
-                                if shape not in ["long", "octagon"]:
-                                    print("Unsupported shape:", shape)
-
-                                px = float(pad["@x"])
-                                py = float(pad["@y"])
-                                if mirror:
-                                    px *= -1
-
-                                if "@rot" in pad:
-                                    rot = pad["@rot"]
-                                    rot_dir = rot[0]
-                                    rot_angle = float(rot[1:])
-                                else:
-                                    rot = ""
-                                    rot_dir = "R"
-                                    rot_angle = 0.0
-
-                                if rot_angle and False:
-                                    x = px
-                                    y = py
-                                    (x, y) = rotate_point(
-                                        0.0, 0.0, x, y, rot_angle * math.pi / 180
-                                    )
-                                    x = element_x + x
-                                    y = element_y + y
-                                else:
-                                    x = element_x + px
-                                    y = element_y + py
-
-                                if element_rot_angle:
-                                    (x, y) = rotate_point(
-                                        element_x,
-                                        element_y,
-                                        x,
-                                        y,
-                                        element_rot_angle * math.pi / 180,
-                                    )
-                                drill = float(pad["@drill"])
-                                msp.add_circle(
-                                    (x, y),
-                                    drill / 2,
-                                    dxfattribs={"layer": "Drills"},
+                                package_add_pad(
+                                    msp,
+                                    pad,
+                                    layer,
+                                    element_name,
+                                    element_x,
+                                    element_y,
+                                    element_rot_angle,
+                                    element_mirror,
                                 )
-                                layers_in_use.add("Drills")
-                                if "@diameter" in pad:
-                                    # round shape
-
-                                    for layer in ["Top", "Bottom"]:
-
-                                        signal_name = ""
-                                        for sname in signals2pads:
-                                            for spad in signals2pads[sname]:
-                                                if (
-                                                    pad["@name"] == spad["@pad"]
-                                                    and element["@name"]
-                                                    == spad["@element"]
-                                                ):
-                                                    signal_name = sname
-                                                    break
-                                        area_name = f"{layer}_{signal_name}"
-                                        if (
-                                            area_name not in polygon_areas
-                                        ):  # TODO: check if inside
-
-                                            diameter = float(pad["@diameter"])
-
-                                            if shape == "octagon":
-                                                polygons[layer].append(
-                                                    Polygon(
-                                                        draw_circle((x, y), diameter / 2, 8)
-                                                    )
-                                                )
-                                            else:
-                                                polygons[layer].append(
-                                                    Polygon(
-                                                        draw_circle((x, y), diameter / 2)
-                                                    )
-                                                )
-                                else:
-                                    # long shape
-
-                                    pad_size = drill / 3 * 2
-                                    x1 = x + pad_size
-                                    y1 = y
-                                    x2 = x - pad_size
-                                    y2 = y
-                                    if rot_angle:
-                                        (x1, y1) = rotate_point(
-                                            x, y, x1, y1, rot_angle * math.pi / 180
-                                        )
-                                        (x2, y2) = rotate_point(
-                                            x, y, x2, y2, rot_angle * math.pi / 180
-                                        )
-                                    if element_rot_angle and rot:
-                                        (x1, y1) = rotate_point(
-                                            x,
-                                            y,
-                                            x1,
-                                            y1,
-                                            element_rot_angle * math.pi / 180,
-                                        )
-                                        (x2, y2) = rotate_point(
-                                            x,
-                                            y,
-                                            x2,
-                                            y2,
-                                            element_rot_angle * math.pi / 180,
-                                        )
-                                    for layer in ["Top", "Bottom"]:
-                                        signal_name = ""
-                                        for sname in signals2pads:
-                                            for spad in signals2pads[sname]:
-                                                if (
-                                                    pad["@name"] == spad["@pad"]
-                                                    and element["@name"]
-                                                    == spad["@element"]
-                                                ):
-                                                    signal_name = sname
-                                                    break
-                                        area_name = f"{layer}_{signal_name}"
-                                        if (
-                                            area_name not in polygon_areas
-                                        ):  # TODO: check if inside
-
-                                            polygons[layer].append(
-                                                Polygon(draw_circle((x1, y1), pad_size))
-                                            )
-                                            polygons[layer].append(
-                                                Polygon(draw_circle((x2, y2), pad_size))
-                                            )
-                                    x1 = x + pad_size
-                                    y1 = y - pad_size
-                                    x2 = x - pad_size
-                                    y2 = y - pad_size
-                                    if rot_angle:
-                                        (x1, y1) = rotate_point(
-                                            x, y, x1, y1, rot_angle * math.pi / 180
-                                        )
-                                        (x2, y2) = rotate_point(
-                                            x, y, x2, y2, rot_angle * math.pi / 180
-                                        )
-                                    if element_rot_angle and rot:
-                                        (x1, y1) = rotate_point(
-                                            x,
-                                            y,
-                                            x1,
-                                            y1,
-                                            element_rot_angle * math.pi / 180,
-                                        )
-                                        (x2, y2) = rotate_point(
-                                            x,
-                                            y,
-                                            x2,
-                                            y2,
-                                            element_rot_angle * math.pi / 180,
-                                        )
-                                    x3 = x + pad_size
-                                    y3 = y + pad_size
-                                    x4 = x - pad_size
-                                    y4 = y + pad_size
-                                    if rot_angle:
-                                        (x3, y3) = rotate_point(
-                                            x, y, x3, y3, rot_angle * math.pi / 180
-                                        )
-                                        (x4, y4) = rotate_point(
-                                            x, y, x4, y4, rot_angle * math.pi / 180
-                                        )
-                                    if element_rot_angle and rot:
-                                        (x3, y3) = rotate_point(
-                                            x,
-                                            y,
-                                            x3,
-                                            y3,
-                                            element_rot_angle * math.pi / 180,
-                                        )
-                                        (x4, y4) = rotate_point(
-                                            x,
-                                            y,
-                                            x4,
-                                            y4,
-                                            element_rot_angle * math.pi / 180,
-                                        )
-                                    for layer in ["Top", "Bottom"]:
-                                        signal_name = ""
-                                        for sname in signals2pads:
-                                            for spad in signals2pads[sname]:
-                                                if (
-                                                    pad["@name"] == spad["@pad"]
-                                                    and element["@name"]
-                                                    == spad["@element"]
-                                                ):
-                                                    signal_name = sname
-                                                    break
-                                        area_name = f"{layer}_{signal_name}"
-                                        if (
-                                            area_name not in polygon_areas
-                                        ):  # TODO: check if inside
-                                            polygons[layer].append(
-                                                Polygon(
-                                                    [
-                                                        (x1, y1),
-                                                        (x2, y2),
-                                                        (x4, y4),
-                                                        (x3, y3),
-                                                    ]
-                                                )
-                                            )
 
                         if "rectangle" in package:
                             if isinstance(package["rectangle"], dict):
                                 package["rectangle"] = [package["rectangle"]]
                             for rectangle in package["rectangle"]:
-                                x1 = element_x + float(rectangle["@x1"])
-                                x2 = element_x + float(rectangle["@x2"])
-                                y1 = element_y + float(rectangle["@y1"])
-                                y2 = element_y + float(rectangle["@y2"])
-                                layer = layerdata[rectangle["@layer"]]["@name"]
-                                color = layerdata[rectangle["@layer"]]["@fill"]
-                                if element_rot_angle:
-                                    (x1, y1) = rotate_point(
-                                        element_x,
-                                        element_y,
-                                        x1,
-                                        y1,
-                                        element_rot_angle * math.pi / 180,
-                                    )
-                                    (x2, y2) = rotate_point(
-                                        element_x,
-                                        element_y,
-                                        x2,
-                                        y2,
-                                        element_rot_angle * math.pi / 180,
-                                    )
-                                msp.add_line(
-                                    (x1, y1),
-                                    (x1, y2),
-                                    dxfattribs={"layer": layer},
+                                package_add_rectangle(
+                                    msp,
+                                    rectangle,
+                                    layer,
+                                    element_name,
+                                    element_x,
+                                    element_y,
+                                    element_rot_angle,
+                                    element_mirror,
                                 )
-                                msp.add_line(
-                                    (x1, y2),
-                                    (x2, y2),
-                                    dxfattribs={"layer": layer},
-                                )
-                                msp.add_line(
-                                    (x2, y2),
-                                    (x2, y1),
-                                    dxfattribs={"layer": layer},
-                                )
-                                msp.add_line(
-                                    (x2, y1),
-                                    (x1, y1),
-                                    dxfattribs={"layer": layer},
-                                )
-                                layers_in_use.add(layer)
 
                         if "wire" in package:
                             if isinstance(package["wire"], dict):
                                 package["wire"] = [package["wire"]]
                             for wire in package["wire"]:
-                                x1 = element_x + float(wire["@x1"])
-                                x2 = element_x + float(wire["@x2"])
-                                y1 = element_y + float(wire["@y1"])
-                                y2 = element_y + float(wire["@y2"])
-                                lw = float(wire["@width"])
-                                layer = layerdata[wire["@layer"]]["@name"]
-                                color = layerdata[rectangle["@layer"]]["@fill"]
-                                if element_rot_angle:
-                                    (x1, y1) = rotate_point(
-                                        element_x,
-                                        element_y,
-                                        x1,
-                                        y1,
-                                        element_rot_angle * math.pi / 180,
-                                    )
-                                    (x2, y2) = rotate_point(
-                                        element_x,
-                                        element_y,
-                                        x2,
-                                        y2,
-                                        element_rot_angle * math.pi / 180,
-                                    )
-                                msp.add_line(
-                                    (x1, y1),
-                                    (x2, y2),
-                                    dxfattribs={
-                                        "layer": layer,
-                                        "lineweight": lw * 100,
-                                    },
+                                package_add_wire(
+                                    msp,
+                                    wire,
+                                    layer,
+                                    element_name,
+                                    element_x,
+                                    element_y,
+                                    element_rot_angle,
+                                    element_mirror,
                                 )
-                                layers_in_use.add(layer)
 
                         if "circle" in package:
                             if isinstance(package["circle"], dict):
                                 package["circle"] = [package["circle"]]
                             for circle in package["circle"]:
-                                x = element_x + float(circle["@x"])
-                                y = element_y + float(circle["@y"])
-                                radius = float(circle["@radius"])
-                                lw = float(circle["@width"])
-                                layer = layerdata[circle["@layer"]]["@name"]
-                                color = layerdata[rectangle["@layer"]]["@fill"]
-                                if element_rot_angle:
-                                    (x, y) = rotate_point(
-                                        element_x,
-                                        element_y,
-                                        x,
-                                        y,
-                                        element_rot_angle * math.pi / 180,
-                                    )
-                                msp.add_circle(
-                                    (x, y), radius, dxfattribs={"layer": layer}
+                                package_add_circle(
+                                    msp,
+                                    circle,
+                                    layer,
+                                    element_name,
+                                    element_x,
+                                    element_y,
+                                    element_rot_angle,
+                                    element_mirror,
                                 )
-                                layers_in_use.add(layer)
 
     polygons_off = {}
     for polylayer in ["Top", "Bottom"]:
