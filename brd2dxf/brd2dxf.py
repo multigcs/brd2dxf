@@ -382,7 +382,7 @@ def package_add_circle(
     radius = float(circle["@radius"])
     lw = float(circle["@width"])
     layer = layerdata[circle["@layer"]]["@name"]
-    color = layerdata[rectangle["@layer"]]["@fill"]
+    color = layerdata[circle["@layer"]]["@fill"]
     if element_rot_angle:
         (x, y) = rotate_point(
             element_x,
