@@ -259,11 +259,14 @@ def main():
         element_x = float(element["@x"])
         element_y = float(element["@y"])
         layer = "Top"
+        mirror = False
         element_rot_angle = 0
         if "@rot" in element:
             rotate = element["@rot"]
             if rotate[0] == "M":
                 layer = "Bottom"
+                # TODO: move center / mirror y ?
+                mirror = True
                 element_rot_angle = float(rotate[2:])
             else:
                 element_rot_angle = float(rotate[1:])
@@ -383,6 +386,15 @@ def main():
                                 if layer not in polygons:
                                     polygons[layer] = []
 
+                                shape = pad.get("@shape")
+                                if shape != "long":
+                                    print("Unsupported shape:", shape)
+
+                                px = float(pad["@x"])
+                                py = float(pad["@y"])
+                                if mirror:
+                                    px *= -1
+
                                 if "@rot" in pad:
                                     rot = pad["@rot"]
                                     rot_dir = rot[0]
@@ -393,16 +405,16 @@ def main():
                                     rot_angle = 0.0
 
                                 if rot_angle and False:
-                                    x = float(pad["@x"])
-                                    y = float(pad["@y"])
+                                    x = px
+                                    y = py
                                     (x, y) = rotate_point(
                                         0.0, 0.0, x, y, rot_angle * math.pi / 180
                                     )
                                     x = element_x + x
                                     y = element_y + y
                                 else:
-                                    x = element_x + float(pad["@x"])
-                                    y = element_y + float(pad["@y"])
+                                    x = element_x + px
+                                    y = element_y + py
 
                                 if element_rot_angle:
                                     (x, y) = rotate_point(
