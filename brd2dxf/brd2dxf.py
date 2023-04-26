@@ -569,6 +569,28 @@ def package_add_smd(
     )
 
 
+def package_add_text(
+    msp,
+    text,
+    layer,
+    element_name,
+    element_x,
+    element_y,
+    element_rot_angle,
+    element_mirror,
+):
+    x = element_x + float(text["@x"])
+    y = element_y + float(text["@y"])
+    size = float(text["@size"])
+    layer = layerdata[text["@layer"]]["@name"]
+    textstr = text["#text"]
+    # TODO: mirror
+    msp.add_text(textstr, height=size, dxfattribs={"layer": layer},).set_placement(
+        (x, y),
+    )
+    layers_in_use.add(layer)
+
+
 def main():
     global fill_areas
 
@@ -757,6 +779,21 @@ def main():
                                 package_add_circle(
                                     msp,
                                     circle,
+                                    layer,
+                                    element_name,
+                                    element_x,
+                                    element_y,
+                                    element_rot_angle,
+                                    element_mirror,
+                                )
+
+                        if "text" in package:
+                            if isinstance(package["text"], dict):
+                                package["text"] = [package["text"]]
+                            for text in package["text"]:
+                                package_add_text(
+                                    msp,
+                                    text,
                                     layer,
                                     element_name,
                                     element_x,
