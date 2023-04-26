@@ -90,7 +90,6 @@ def signal_add_wire(msp, wire, signal_name):
     y2 = float(wire["@y2"])
     lw = float(wire["@width"])
     layer = layerdata[wire["@layer"]]["@name"]
-    color = layerdata[wire["@layer"]]["@fill"]
     radius = lw / 2
     p_from = (x1, y1)
     p_to = (x2, y2)
@@ -142,14 +141,7 @@ def signal_add_via(msp, via, signal_name):
 
 
 def signal_add_polygon(msp, polygon, signal_name):
-    lw = float(polygon["@width"])
     layer = layerdata[polygon["@layer"]]["@name"]
-    color = layerdata[polygon["@layer"]]["@color"]
-    last = (
-        float(polygon["vertex"][-1]["@x"]),
-        float(polygon["vertex"][-1]["@y"]),
-    )
-
     points = []
     for point in polygon["vertex"]:
         x = float(point["@x"])
@@ -203,11 +195,10 @@ def package_add_pad(
 
     if "@rot" in pad:
         rot = pad["@rot"]
-        rot_dir = rot[0]
+        # rot_dir = rot[0]
         rot_angle = float(rot[1:])
     else:
         rot = ""
-        rot_dir = "R"
         rot_angle = 0.0
 
     if rot_angle and False:
@@ -384,9 +375,7 @@ def package_add_circle(
     x = element_x + float(circle["@x"])
     y = element_y + float(circle["@y"])
     radius = float(circle["@radius"])
-    lw = float(circle["@width"])
     layer = layerdata[circle["@layer"]]["@name"]
-    color = layerdata[circle["@layer"]]["@fill"]
     if element_rot_angle:
         (x, y) = rotate_point(
             element_x,
@@ -415,7 +404,6 @@ def package_add_wire(
     y2 = element_y + float(wire["@y2"])
     lw = float(wire["@width"])
     layer = layerdata[wire["@layer"]]["@name"]
-    color = layerdata[wire["@layer"]]["@fill"]
     if element_rot_angle:
         (x1, y1) = rotate_point(
             element_x,
@@ -457,7 +445,6 @@ def package_add_rectangle(
     y1 = element_y + float(rectangle["@y1"])
     y2 = element_y + float(rectangle["@y2"])
     layer = layerdata[rectangle["@layer"]]["@name"]
-    color = layerdata[rectangle["@layer"]]["@fill"]
     if element_rot_angle:
         (x1, y1) = rotate_point(
             element_x,
@@ -516,11 +503,10 @@ def package_add_smd(
     y2 = y + dy / 2
     if "@rot" in smd:
         rot = smd["@rot"]
-        rot_dir = rot[0]
+        # rot_dir = rot[0]
         rot_angle = float(rot[1:])
     else:
         rot = ""
-        rot_dir = "R"
         rot_angle = 0.0
     if element_rot_angle:
         (x1, y1) = rotate_point(
