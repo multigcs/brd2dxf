@@ -46,6 +46,7 @@ polygons = {}
 polygon_areas = {}
 signals2pads = {}
 plain = []
+fill_areas = False
 
 
 def angle_of_line(p_1, p_2):
@@ -134,7 +135,7 @@ def signal_add_via(msp, via, signal_name):
 
     for layer in ["Top", "Bottom"]:
         area_name = f"{layer}_{signal_name}"
-        if area_name not in polygon_areas:  # TODO: check if inside
+        if not fill_areas or area_name not in polygon_areas:  # TODO: check if inside
             if layer not in polygons:
                 polygons[layer] = []
             polygons[layer].append(Polygon(draw_circle((x, y), size)))
@@ -248,10 +249,10 @@ def package_add_pad(
                         signal_name = sname
                         break
             area_name = f"{layer}_{signal_name}"
-            if area_name not in polygon_areas:  # TODO: check if inside
-
+            if (
+                not fill_areas or area_name not in polygon_areas
+            ):  # TODO: check if inside
                 diameter = float(pad["@diameter"])
-
                 if shape == "octagon":
                     polygons[layer].append(
                         Polygon(draw_circle((x, y), diameter / 2, 8))
@@ -295,8 +296,9 @@ def package_add_pad(
                         signal_name = sname
                         break
             area_name = f"{layer}_{signal_name}"
-            if area_name not in polygon_areas:  # TODO: check if inside
-
+            if (
+                not fill_areas or area_name not in polygon_areas
+            ):  # TODO: check if inside
                 polygons[layer].append(Polygon(draw_circle((x1, y1), pad_size)))
                 polygons[layer].append(Polygon(draw_circle((x2, y2), pad_size)))
         x1 = x + pad_size
@@ -354,7 +356,9 @@ def package_add_pad(
                         signal_name = sname
                         break
             area_name = f"{layer}_{signal_name}"
-            if area_name not in polygon_areas:  # TODO: check if inside
+            if (
+                not fill_areas or area_name not in polygon_areas
+            ):  # TODO: check if inside
                 polygons[layer].append(
                     Polygon(
                         [
@@ -559,8 +563,7 @@ def package_add_smd(
                 signal_name = sname
                 break
     area_name = f"{layer}_{signal_name}"
-    if area_name not in polygon_areas:  # TODO: check if inside
-
+    if not fill_areas or area_name not in polygon_areas:  # TODO: check if inside
         if layer not in polygons:
             polygons[layer] = []
 
@@ -591,6 +594,7 @@ def package_add_smd(
 
 
 def main():
+    global fill_areas
 
     parser = argparse.ArgumentParser()
     parser.add_argument("filename", help="brd file", type=str, default=None)
@@ -600,7 +604,10 @@ def main():
     )
     parser.add_argument("--list", help="list layers", action="store_true")
     parser.add_argument("--simple", help="simplifyed layers", action="store_true")
+    parser.add_argument("--nofill", help="do not fill areas", action="store_true")
     args = parser.parse_args()
+
+    fill_areas = not args.nofill
 
     if args.simple and args.list:
         for layer in selections:
