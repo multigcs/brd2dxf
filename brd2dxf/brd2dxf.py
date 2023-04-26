@@ -460,24 +460,14 @@ def package_add_rectangle(
             y2,
             element_rot_angle * math.pi / 180,
         )
-    msp.add_line(
-        (x1, y1),
-        (x1, y2),
-        dxfattribs={"layer": layer},
-    )
-    msp.add_line(
-        (x1, y2),
-        (x2, y2),
-        dxfattribs={"layer": layer},
-    )
-    msp.add_line(
-        (x2, y2),
-        (x2, y1),
-        dxfattribs={"layer": layer},
-    )
-    msp.add_line(
-        (x2, y1),
-        (x1, y1),
+    msp.add_polyline2d(
+        (
+            (x1, y1),
+            (x1, y2),
+            (x2, y2),
+            (x2, y1),
+            (x1, y1),
+        ),
         dxfattribs={"layer": layer},
     )
     layers_in_use.add(layer)
