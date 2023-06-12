@@ -184,14 +184,13 @@ def package_add_pad(
     if layer not in polygons:
         polygons[layer] = []
 
-    shape = pad.get("@shape")
-    if shape not in ["long", "octagon"]:
+    shape = pad.get("@shape", "round")
+
+    if shape not in ["long", "octagon", "round"]:
         print("Unsupported shape:", shape)
 
     px = float(pad["@x"])
     py = float(pad["@y"])
-    if element_mirror:
-        px *= -1
 
     if "@rot" in pad:
         rot = pad["@rot"]
@@ -200,6 +199,10 @@ def package_add_pad(
     else:
         rot = ""
         rot_angle = 0.0
+
+    if element_mirror:
+        px *= -1
+        py *= -1
 
     if rot_angle and False:
         x = px
@@ -226,7 +229,7 @@ def package_add_pad(
         dxfattribs={"layer": "Drills"},
     )
     layers_in_use.add("Drills")
-    if "@diameter" in pad:
+    if shape in ["octagon", "round"]:
         # round and octagon shape
 
         for layer in ["Top", "Bottom"]:
@@ -243,7 +246,7 @@ def package_add_pad(
             if (
                 not fill_areas or area_name not in polygon_areas
             ):  # TODO: check if inside
-                diameter = float(pad["@diameter"])
+                diameter = float(pad.get("@diameter", 1.5))
                 if shape == "octagon":
                     polygons[layer].append(
                         Polygon(draw_circle((x, y), diameter / 2, 8))
