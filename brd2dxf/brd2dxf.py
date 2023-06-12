@@ -201,8 +201,10 @@ def package_add_pad(
         rot_angle = 0.0
 
     if element_mirror:
-        px *= -1
-        py *= -1
+        if element_rot_angle in [90.0, 270.0]:
+            py *= -1
+        else:
+            px *= -1
 
     if rot_angle and False:
         x = px
@@ -231,7 +233,6 @@ def package_add_pad(
     layers_in_use.add("Drills")
     if shape in ["octagon", "round"]:
         # round and octagon shape
-
         for layer in ["Top", "Bottom"]:
             signal_name = ""
             for sname in signals2pads:
@@ -246,7 +247,7 @@ def package_add_pad(
             if (
                 not fill_areas or area_name not in polygon_areas
             ):  # TODO: check if inside
-                diameter = float(pad.get("@diameter", 1.5))
+                diameter = float(pad.get("@diameter", drill * 1.5))
                 if shape == "octagon":
                     polygons[layer].append(
                         Polygon(draw_circle((x, y), diameter / 2, 8))
@@ -486,8 +487,16 @@ def package_add_smd(
     element_rot_angle,
     element_mirror,
 ):
-    x = element_x + float(smd["@x"])
-    y = element_y + float(smd["@y"])
+
+    sx = float(smd["@x"])
+    sy = float(smd["@y"])
+    if element_mirror:
+        if element_rot_angle in [90.0, 270.0]:
+            sy *= -1
+        else:
+            sx *= -1
+    x = element_x + sx
+    y = element_y + sy
     dx = float(smd["@dx"])
     dy = float(smd["@dy"])
     x1 = x - dx / 2
@@ -501,6 +510,7 @@ def package_add_smd(
     else:
         rot = ""
         rot_angle = 0.0
+
     if element_rot_angle:
         (x1, y1) = rotate_point(
             element_x,
@@ -517,7 +527,7 @@ def package_add_smd(
             element_rot_angle * math.pi / 180,
         )
 
-    if rot_angle:
+    if rot_angle and False:
         cx = x1 + (x2 - x1) / 2
         cy = y1 + (y2 - y1) / 2
         (x1, y1) = rotate_point(
